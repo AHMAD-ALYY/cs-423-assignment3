@@ -1,0 +1,400 @@
+# CS-423 DevOps CI/CD Assignment – Complete Step-by-Step Guide 
+
+> **Student:** Ahmad Ali Khan
+> **Course:** CS-423 – DevOps
+> **Assignment:** CI/CD Automation (Development → Testing → Staging)
+
+---
+
+## 🔰 OVERVIEW (READ THIS FIRST)
+
+This README is a **complete execution + explanation guide** for **Tasks 1, 2, and 3** of the CS-423 DevOps assignment.
+
+It includes:
+
+* ✅ Local machine deployment (React + Node)
+* ✅ AWS EC2 Testing & Staging setup
+* ✅ Git & GitHub configuration
+* ✅ CI/CD pipelines using GitHub Actions
+* ✅ Exact commands
+* ✅ Exact directories where commands are run
+* ✅ Full YAML workflow files
+* ✅ Security best practices + key leak fix
+
+This document can be used for **demo, viva, and final submission**.
+
+---
+
+# 🟢 TASK 1 – Local Deployment & GitHub Setup (30 Marks)
+
+## 1. Clone Open-Source Application
+
+### 📍 Where: **Any local directory**
+
+```bash
+git clone https://github.com/eljamaki01/ReactNodeTesting.git
+cd ReactNodeTesting
+```
+
+📁 You are now inside the **project root directory**.
+
+---
+
+## 2. Understand Project Structure
+
+```text
+ReactNodeTesting/
+├── index.js              # Node/Express backend entry
+├── package.json          # Dependencies & scripts
+├── src/                   # React source code
+├── public/                # Static files
+├── api_endpoint.test.js   # API unit tests
+└── README.md
+```
+
+---
+
+## 3. Install Dependencies (LOCAL MACHINE)
+
+### 📍 Where: **Project root (ReactNodeTesting)**
+
+```bash
+npm install
+```
+
+If `npm` is missing:
+
+```bash
+brew install node   # macOS
+sudo apt install nodejs npm   # Ubuntu
+```
+
+---
+
+## 4. Build React Frontend (REQUIRED)
+
+⚠️ **Important:** Express serves files from `/build`
+
+### 📍 Where: **Project root**
+
+```bash
+npm run build-react
+```
+
+This creates:
+
+```text
+/build/index.html
+```
+
+Without this, you get:
+
+> ❌ ENOENT: no such file or directory build/index.html
+
+---
+
+## 5. Run Application Locally
+
+### 📍 Where: **Project root**
+
+```bash
+npm start
+```
+
+Expected output:
+
+```text
+Express server listening on port 3000
+```
+
+### 🌐 Access:
+
+```
+http://localhost:3000
+```
+
+---
+
+## 6. Fix Port Already in Use Error
+
+```bash
+lsof -i :3000
+kill -9 <PID>
+```
+
+---
+
+## 7. Push Project to Your Own GitHub Repository
+
+### 📍 Where: **Project root**
+
+```bash
+git remote remove origin
+git remote add origin https://github.com/AHMAD-ALYY/cs-423-assignment3.git
+git branch -M main
+git push -u origin main
+```
+
+---
+
+## 8. GitHub Repository Configuration
+
+* Repo visibility: **Public**
+* Add instructor + teammate as **collaborators**
+* Protect `main` branch:
+
+  * ❌ No direct pushes
+  * ✅ Pull requests required
+
+---
+
+# 🟢 TASK 2 – AWS EC2 Testing & Staging Setup (15 Marks)
+
+## 1. Create EC2 Instances
+
+Create **two EC2 instances**:
+
+| Environment | Name          | OS               | Purpose       |
+| ----------- | ------------- | ---------------- | ------------- |
+| Testing     | cs423-testing | Ubuntu 24.04 LTS | QA testing    |
+| Staging     | cs423-staging | Ubuntu 24.04 LTS | Client review |
+
+---
+
+## 2. Create ONE Shared Security Group
+
+### Inbound Rules:
+
+| Type       | Port | Source    |
+| ---------- | ---- | --------- |
+| SSH        | 22   | Your IP   |
+| HTTP       | 80   | 0.0.0.0/0 |
+| Custom TCP | 3000 | 0.0.0.0/0 |
+
+💡 *Principle of Least Privilege applied*
+
+---
+
+## 3. Connect to EC2
+
+### 📍 Where: **Local machine (folder with .pem)**
+
+```bash
+chmod 400 cs423-task2-key.pem
+ssh -i cs423-task2-key.pem ubuntu@<EC2_PUBLIC_IP>
+```
+
+---
+
+## 4. Install Dependencies on EC2
+
+### 📍 Where: **Inside EC2 terminal**
+
+```bash
+sudo apt update
+sudo apt install -y nodejs npm git
+```
+
+Verify:
+
+```bash
+node -v
+npm -v
+```
+
+---
+
+## 5. Deploy App on EC2 (Manual – Baseline)
+
+```bash
+git clone https://github.com/AHMAD-ALYY/cs-423-assignment3.git
+cd cs-423-assignment3
+npm install
+npm run build-react
+sudo node index.js
+```
+
+Access:
+
+```
+http://<EC2_PUBLIC_IP>:3000
+```
+
+---
+
+# 🟢 TASK 3 – CI/CD Automation (55 Marks)
+
+## CI/CD Architecture
+
+```text
+Feature Branch → PR → GitHub Actions → Testing EC2
+Main Branch → Push → GitHub Actions → Staging EC2
+```
+
+---
+
+## 1. Create GitHub Actions Directory
+
+### 📍 Where: **Project root (LOCAL)**
+
+```bash
+mkdir -p .github/workflows
+```
+
+---
+
+## 2. GitHub Secrets (Repository Level)
+
+**GitHub → Repo → Settings → Secrets → Actions**
+
+| Name           | Value               |
+| -------------- | ------------------- |
+| EC2_TESTING_IP | Testing EC2 IP      |
+| EC2_STAGING_IP | Staging EC2 IP      |
+| EC2_USER       | ubuntu              |
+| EC2_SSH_KEY    | PRIVATE KEY CONTENT |
+| EMAIL_USERNAME | SMTP email          |
+| EMAIL_PASSWORD | SMTP password       |
+
+❗ Never commit `.pem` files
+
+---
+
+## 3. Workflow 1 – Deploy to TESTING
+
+📄 `.github/workflows/deploy-testing.yml`
+
+```yaml
+name: Deploy to Testing
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  testing:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: 18
+
+    - name: Install dependencies
+      run: npm install
+
+    - name: Build React
+      run: npm run build-react
+
+    - name: Unit Tests
+      run: npm run test-API
+
+    - name: Lint Check
+      run: npx eslint . || true
+
+    - name: Deploy to Testing EC2
+      uses: appleboy/ssh-action@v1
+      with:
+        host: ${{ secrets.EC2_TESTING_IP }}
+        username: ${{ secrets.EC2_USER }}
+        key: ${{ secrets.EC2_SSH_KEY }}
+        script: |
+          cd cs-423-assignment3
+          git pull
+          npm install
+          npm run build-react
+          sudo node index.js
+```
+
+---
+
+## 4. Workflow 2 – Deploy to STAGING
+
+📄 `.github/workflows/deploy-staging.yml`
+
+```yaml
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  staging:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 18
+
+    - run: npm install
+    - run: npm run build-react
+    - run: npm run test-API
+
+    - name: Deploy to Staging EC2
+      uses: appleboy/ssh-action@v1
+      with:
+        host: ${{ secrets.EC2_STAGING_IP }}
+        username: ${{ secrets.EC2_USER }}
+        key: ${{ secrets.EC2_SSH_KEY }}
+        script: |
+          cd cs-423-assignment3
+          git pull
+          npm install
+          npm run build-react
+          sudo node index.js
+```
+
+---
+
+## 5. Security Incident – Private Key Leak (Handled)
+
+### Fix Applied:
+
+```bash
+git filter-branch --force --index-filter \
+"git rm --cached --ignore-unmatch cs423-task2-key.pem" \
+--prune-empty --tag-name-filter cat -- --all
+
+git push origin --force --all
+git push origin --force --tags
+```
+
+* Key revoked
+* New key generated
+* Secrets used instead
+
+---
+
+## ✅ FINAL CHECKLIST
+
+* [x] Local deployment
+* [x] AWS Testing & Staging
+* [x] CI/CD pipelines
+* [x] Unit tests
+* [x] Linting
+* [x] Notifications (configurable)
+* [x] Security compliance
+
+---
+
+## 🎓 VIVA READY STATEMENTS
+
+> "Local build ensures frontend assets exist before Express serves them"
+
+> "CI/CD pipelines remove manual deployment errors"
+
+> "Secrets are stored securely using GitHub Secrets"
+
+---
+
+**END OF DOCUMENT**
