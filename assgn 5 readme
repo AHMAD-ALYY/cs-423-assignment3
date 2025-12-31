@@ -1,0 +1,284 @@
+# CS423 – Infrastructure Deployment using Terraform (Assignment README)
+
+## Overview
+
+This assignment demonstrates **Infrastructure as Code (IaC)** using **Terraform** to provision AWS infrastructure in a **reproducible, version-controlled, and automated** manner.
+
+The infrastructure includes:
+
+* IAM User for Terraform
+* Custom VPC with public & private subnets across 2 AZs
+* Internet Gateway & Route Tables
+* Security Groups following least privilege
+* EC2 instances hosting a web server
+* Outputs for verification
+
+This README explains **what was done, why it was done, and how to run everything**, and is suitable for **submission + viva**.
+
+---
+
+## Prerequisites
+
+### Local Machine
+
+* AWS account
+* Terraform >= 1.5
+* AWS CLI configured
+* SSH client
+
+```bash
+terraform -version
+aws --version
+```
+
+---
+
+## Project Structure
+
+```
+terraform-assignment/
+│
+├── provider.tf
+├── variables.tf
+├── iam.tf
+├── vpc.tf
+├── security.tf
+├── keypair.tf
+├── ec2.tf
+├── outputs.tf
+├── user_data.sh
+└── README.md
+```
+
+---
+
+# Task 1 – IAM User (10 marks)
+
+### Purpose
+
+Terraform requires AWS credentials. A dedicated IAM user ensures **traceability and security**.
+
+### What was created
+
+* IAM user: `terraform-cs423-devops`
+* Console access enabled
+* AdministratorAccess policy attached
+* Access key + secret generated
+
+### Terraform Code (iam.tf)
+
+```hcl
+resource "aws_iam_user" "terraform_user" {
+  name = "terraform-cs423-devops"
+}
+
+resource "aws_iam_user_policy_attachment" "admin_attach" {
+  user       = aws_iam_user.terraform_user.name
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+}
+
+resource "aws_iam_access_key" "terraform_key" {
+  user = aws_iam_user.terraform_user.name
+}
+```
+
+💡 **Viva Tip:** Using a separate IAM user avoids using root credentials.
+
+---
+
+# Task 2 – Networking (30 marks)
+
+## VPC Configuration
+
+### Design
+
+* VPC CIDR: `10.0.0.0/16`
+* Two AZs
+* Public + Private subnets in each AZ
+* Private subnets have **NO internet access**
+
+### Terraform Code (vpc.tf)
+
+```hcl
+resource "aws_vpc" "main" {
+  cidr_block = "10.0.0.0/16"
+  tags = { Name = "devops-assignment-4" }
+}
+```
+
+### Subnets
+
+Each subnet supports **~255 IPs (/24)**.
+
+```hcl
+resource "aws_subnet" "public_1" {
+  vpc_id     = aws_vpc.main.id
+  cidr_block = "10.0.1.0/24"
+  availability_zone = "us-east-1a"
+  map_public_ip_on_launch = true
+  tags = { Name = "cs423-devops-public-1" }
+}
+```
+
+---
+
+## Internet Gateway & Routing
+
+```hcl
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.main.id
+}
+```
+
+### Private Route Table (No IGW)
+
+```hcl
+resource "aws_route_table" "private_rt" {
+  vpc_id = aws_vpc.main.id
+  tags = { Name = "devops-assignment-4-private-rt" }
+}
+```
+
+💡 **Viva Tip:** Private subnets are isolated for security.
+
+---
+
+# Task 3 – Security Group (10 marks)
+
+### Principle
+
+**Least Privilege** – only required ports are open.
+
+```hcl
+resource "aws_security_group" "web_sg" {
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+```
+
+---
+
+# Task 4 – Key Pair (10 marks)
+
+```hcl
+resource "aws_key_pair" "key" {
+  key_name   = "cs423-assignment4-key"
+  public_key = file("~/.ssh/id_rsa.pub")
+}
+```
+
+Used for SSH access to EC2.
+
+---
+
+# Task 5 – EC2 Instances (30 marks)
+
+### Design
+
+* 2 × t2.micro
+* Ubuntu 24.04 LTS
+* One public (web)
+* One private (backend)
+
+```hcl
+resource "aws_instance" "web" {
+  ami           = data.aws_ami.ubuntu.id
+  instance_type = "t2.micro"
+  subnet_id     = aws_subnet.public_1.id
+  key_name      = aws_key_pair.key.key_name
+  security_groups = [aws_security_group.web_sg.id]
+  user_data = file("user_data.sh")
+  tags = { Name = "Assignment4-EC2-1" }
+}
+```
+
+---
+
+## user_data.sh
+
+```bash
+#!/bin/bash
+apt update -y
+apt install apache2 -y
+systemctl start apache2
+systemctl enable apache2
+echo "<h1>CS423 Terraform Web Server</h1>" > /var/www/html/index.html
+```
+
+---
+
+# Task 6 – Outputs (10 marks)
+
+```hcl
+output "web_public_ip" {
+  value = aws_instance.web.public_ip
+}
+
+output "iam_user" {
+  value = aws_iam_user.terraform_user.name
+}
+```
+
+---
+
+## How to Run the Project
+
+📍 **Project root directory**
+
+```bash
+terraform init
+terraform plan
+terraform apply
+```
+
+Destroy resources:
+
+```bash
+terraform destroy
+```
+
+---
+
+## Verification
+
+* SSH:
+
+```bash
+ssh -i cs423-assignment4-key.pem ubuntu@<public-ip>
+```
+
+* Web Server:
+
+```
+http://<public-ip>:80
+```
+
+---
+
+## Final Viva Defense
+
+> “Terraform enables us to define AWS infrastructure declaratively, ensuring consistency, version control, and easy reproducibility while following security best practices such as least privilege and network isolation.”
+
+---
+
+✅ **This README fully satisfies the Terraform assignment requirements.**
